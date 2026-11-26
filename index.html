@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>作业人员姿态识别与安全追踪系统 · Worker Safety Monitor</title>
+<meta name="description" content="基于骨骼关键点与多目标追踪的作业人员姿态识别与安全预警系统（浏览器端实时推理 + 语音播报闭环）" />
+<link rel="stylesheet" href="assets/css/style.css?v=20261126b" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23081220'/%3E%3Ccircle cx='32' cy='22' r='8' fill='%2322d3ee'/%3E%3Cpath d='M32 32v14M32 38l-10 8M32 38l10 8M32 46l-8 12M32 46l8 12' stroke='%2334d399' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">WSM</div>
+      <div>
+        <h1>作业人员姿态识别与安全追踪系统</h1>
+        <p>YOLOv8-Pose · DeepSORT 架构复刻 / 浏览器端实时推理 · 语音闭环</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="pill" id="modelPill">模型待启动</span>
+      <span class="pill" id="fpsPill">FPS --</span>
+      <span class="pill" id="voicePill">语音待解锁</span>
+      <span class="pill" id="clockPill">--:--:--</span>
+      <button class="ghost-btn" id="btnMute">语音：开</button>
+      <button class="ghost-btn" id="btnSources">数据来源 / 参考仓库</button>
+    </div>
+  </header>
+
+  <!-- ================= 视图切换 ================= -->
+  <nav class="tabs">
+    <button class="tab active" data-view="live">实时监控<i class="tab-badge" id="tabBadge" hidden>0</i></button>
+    <button class="tab" data-view="history">历史回溯</button>
+    <button class="tab" data-view="stats">数据统计</button>
+    <button class="tab" data-view="settings">系统设置</button>
+  </nav>
+
+  <main>
+
+    <!-- ================= 实时监控 ================= -->
+    <section class="view active" id="view-live">
+
+      <!-- 顶部告警横幅：检测到高危情况时整条亮起 -->
+      <div class="alarm-banner" id="alarmBanner">
+        <span class="ab-icon">!</span>
+        <div class="ab-main">
+          <b id="abTitle">跌倒告警</b>
+          <span id="abText">请注意，工作区内有人摔倒</span>
+        </div>
+        <span class="ab-meta" id="abMeta">—</span>
+        <div class="ab-actions">
+          <button class="btn sm" id="abVoice">再次播报</button>
+          <button class="btn sm primary" id="abAck">已处理</button>
+        </div>
+      </div>
+
+      <div class="live-grid">
+
+        <!-- 左：功能模块 -->
+        <aside class="col-left">
+          <div class="card">
+            <h3>功能模块</h3>
+            <ul class="toggle-list">
+              <li><input type="checkbox" data-flag="person" checked /><span>人员检测</span><em class="en">DETECT</em></li>
+              <li><input type="checkbox" data-flag="pose" checked /><span>关键点姿态估计</span><em class="en">POSE</em></li>
+              <li><input type="checkbox" data-flag="track" checked /><span>目标 ID 追踪</span><em class="en">TRACK</em></li>
+              <li><input type="checkbox" data-flag="fall" checked /><span>跌倒识别</span><em class="en">FALL</em></li>
+              <li><input type="checkbox" data-flag="bend" checked /><span>弯腰 / 攀爬识别</span><em class="en">POSTURE</em></li>
+              <li><input type="checkbox" data-flag="zone" checked /><span>安全区域预警</span><em class="en">ZONE</em></li>
+              <li><input type="checkbox" data-flag="loiter" checked /><span>滞留识别</span><em class="en">DWELL</em></li>
+              <li><input type="checkbox" data-flag="record" checked /><span>事件记录与留存</span><em class="en">LOG</em></li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3>预警状态 <span class="sub">SESSION</span></h3>
+            <ul class="alert-list" id="alertList">
+              <li data-level="mid" data-type="攀爬作业"><i class="dot"></i>攀爬作业<b id="al-climb">0</b></li>
+              <li data-level="mid" data-type="弯腰作业"><i class="dot"></i>弯腰作业<b id="al-bend">0</b></li>
+              <li data-level="high" data-type="跌倒"><i class="dot"></i>跌倒<b id="al-fall">0</b></li>
+              <li data-level="mid" data-type="人员滞留"><i class="dot"></i>人员滞留<b id="al-loiter">0</b></li>
+              <li data-level="high" data-type="进入危险区"><i class="dot"></i>进入危险区<b id="al-zone">0</b></li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3>语音播报 <span class="sub">VOICE</span></h3>
+            <div class="vs-list">
+              <div class="vs-row"><span>引擎</span><b id="voiceEngine">检测中…</b></div>
+              <div class="vs-row"><span>音色</span><b id="voiceName" title="">—</b></div>
+              <div class="vs-row"><span>状态</span><b id="voiceStatus">待命</b></div>
+            </div>
+            <div class="voice-meter" id="voiceMeter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="vs-quote" id="voiceQuote">等待检测事件…</div>
+            <div class="vs-actions">
+              <button class="btn sm ghost" id="btnVoiceTest">试听音色</button>
+              <button class="btn sm ghost" id="btnVoiceStop">停止播报</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 中：视频舞台 -->
+        <div class="col-center">
+          <div class="card stage">
+            <div class="stage-head">
+              <span class="live" id="liveTag"><i></i>LIVE</span>
+              <span id="stageInfo">等待启动</span>
+            </div>
+            <div class="video-wrap" id="videoWrap">
+              <video id="video" playsinline muted autoplay></video>
+              <img id="stageImage" alt="上传的现场图片" hidden />
+              <canvas id="overlay"></canvas>
+              <div class="stage-alert" id="stageAlert"></div>
+              <div class="speech-bar" id="speechBar">
+                <span class="spk"><i></i><i></i><i></i><i></i></span>
+                <span class="sb-txt" id="speechText">语音播报就绪</span>
+                <span class="sb-tag" id="speechTag">IDLE</span>
+              </div>
+              <div class="stage-error" id="stageError"></div>
+              <div class="img-loading" id="imgLoading">
+                <div class="il-box">
+                  <span class="il-spin"></span>
+                  <b id="ilTitle">正在读取图片…</b>
+                  <span id="ilSub">请稍候</span>
+                </div>
+              </div>
+            </div>
+            <div class="stage-toolbar">
+              <button class="btn primary" id="btnStart">启动摄像头</button>
+              <button class="btn danger" id="btnStop" disabled>停止</button>
+              <label class="btn ghost" for="fileInput" id="btnVideoFile">上传视频</label>
+              <input type="file" id="fileInput" accept="video/*" class="file-hidden" />
+              <label class="btn ghost" for="imgInput" id="btnImageFile">上传图片</label>
+              <input type="file" id="imgInput" accept="image/*" class="file-hidden" />
+              <select id="camSelect" title="选择摄像头"><option value="">默认摄像头</option></select>
+              <button class="btn ghost" id="btnMirror">镜像：开</button>
+              <button class="btn ghost" id="btnZone">绘制危险区</button>
+              <button class="btn ghost" id="btnZoneDone" disabled>完成区域</button>
+              <button class="btn ghost" id="btnZoneClear">清除区域</button>
+              <button class="btn ghost" id="btnSnap">截图存档</button>
+            </div>
+          </div>
+
+          <!-- 图片静态检测结果（仅图片模式下显示） -->
+          <div class="card img-card" id="imgCard" hidden>
+            <h3>
+              图片识别结果 <span class="sub" id="imgMeta">STILL</span>
+              <div class="chips">
+                <button class="chip" id="btnImgRerun">重新检测</button>
+                <button class="chip" id="btnImgSave">导出标注图</button>
+                <button class="chip" id="btnImgClose">退出图片模式</button>
+              </div>
+            </h3>
+            <div class="img-sum" id="imgSum"></div>
+            <ul class="img-list" id="imgList"></ul>
+            <p class="mini-note" style="margin:8px 0 0">
+              图片是单帧输入，只能判断「此刻」的姿态与是否闯入危险区；跌倒连续帧、弯腰持续帧、攀爬保持时长、滞留时长等
+              依赖时间的规则在静态图中不参与判定。也可以把图片直接拖到画面上，或按 Ctrl+V 粘贴截图。
+            </p>
+          </div>
+        </div>
+
+        <!-- 右：统计 + 待处理告警 -->
+        <aside class="col-right">
+          <div class="card">
+            <h3>实时统计</h3>
+            <div class="kpi-grid">
+              <div class="kpi"><div class="k">检测人数</div><div class="v" id="kpi-detected">0</div></div>
+              <div class="kpi"><div class="k">目标 ID 数</div><div class="v" id="kpi-ids">0</div></div>
+              <div class="kpi hot"><div class="k">危险姿态</div><div class="v" id="kpi-danger">0</div></div>
+              <div class="kpi hot"><div class="k">违规人数</div><div class="v" id="kpi-violators">0</div></div>
+              <div class="kpi"><div class="k">进入危险区</div><div class="v" id="kpi-inzone">0</div></div>
+              <div class="kpi"><div class="k">今日事件</div><div class="v" id="kpi-today">0</div></div>
+              <div class="kpi alarm"><div class="k">待处理告警</div><div class="v" id="kpi-pending">0</div></div>
+              <div class="kpi"><div class="k">语音播报</div><div class="v" id="kpi-voiced">0</div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>待处理告警 <span class="sub" id="pendingSub">0 条</span></h3>
+            <ul class="alert-queue" id="alertQueue">
+              <li class="detail-empty">暂无待处理告警。检测到危险动作或手动喊话后会出现在这里。</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3>风险等级分布 <span class="sub">RISK</span></h3>
+            <div class="donut-wrap">
+              <canvas id="riskDonut" width="224" height="224"></canvas>
+              <ul class="legend">
+                <li><i style="background:#f43f5e"></i>高风险<b id="risk-high">0%</b></li>
+                <li><i style="background:#fbbf24"></i>中风险<b id="risk-mid">0%</b></li>
+                <li><i style="background:#34d399"></i>低风险<b id="risk-low">0%</b></li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>当前目标 <span class="sub" id="trackCount">0 tracks</span></h3>
+            <ul class="track-list" id="trackList">
+              <li class="detail-empty" style="cursor:default;background:none;border:0;padding:0">暂无追踪目标，启动摄像头后自动出现。</li>
+            </ul>
+          </div>
+        </aside>
+      </div>
+
+      <!-- 语音喊话台 -->
+      <div class="broadcast-row">
+        <div class="card">
+          <h3>
+            语音喊话台 <span class="sub">BROADCAST CONSOLE</span>
+          </h3>
+          <div class="preset-grid" id="presetGrid"></div>
+          <div class="say-row">
+            <input type="text" id="sayInput" placeholder="输入自定义播报内容，回车立即播报…" maxlength="60" />
+            <select id="sayLevel" title="播报等级">
+              <option value="high">紧急</option>
+              <option value="mid" selected>提醒</option>
+              <option value="low">提示</option>
+            </select>
+            <button class="btn primary" id="btnSay">立即播报</button>
+          </div>
+          <p class="mini-note" style="margin:8px 0 0">
+            按钮与输入框发出的内容会同时写入「待处理告警」与「事件记录」，形成可追溯的喊话流水；
+            高危等级会抢占正在播放的低优先级语音。
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>播报流水 <span class="sub" id="bcastCount">0 条</span></h3>
+          <ul class="bcast-list" id="bcastList">
+            <li class="detail-empty">暂无播报记录。</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 底部：目标详情 + 事件记录 -->
+      <div class="events-row">
+        <div class="card">
+          <h3>目标详情 <span class="sub">KEYPOINT</span></h3>
+          <div id="detailBox" class="detail-empty">在画面中点击某位作业人员，查看其骨骼角度与判定依据。</div>
+        </div>
+
+        <div class="card">
+          <h3>
+            事件记录
+            <div class="chips">
+              <button class="chip active" data-filter="all">全部</button>
+              <button class="chip" data-filter="alert">仅预警</button>
+              <button class="chip" data-filter="normal">正常作业</button>
+              <button class="chip" data-filter="pending">待处理</button>
+              <button class="chip" id="btnExport">导出 CSV</button>
+            </div>
+          </h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>时间</th><th>人员 ID</th><th>事件类型</th><th>置信度</th><th>区域位置</th><th>语音播报</th><th>处理状态</th><th>快照</th></tr>
+              </thead>
+              <tbody id="eventBody">
+                <tr class="empty-row"><td colspan="8">暂无事件记录</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 历史回溯 ================= -->
+    <section class="view" id="view-history">
+      <div class="hist-grid">
+        <div class="card">
+          <h3>监测会话 <span class="sub" id="histCount">0</span></h3>
+          <ul class="hist-list" id="histList">
+            <li class="detail-empty" style="cursor:default;background:none;border:0">暂无历史会话。每次启动采集会自动建立一条会话记录（保存在本机浏览器）。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>会话明细 <span class="sub" id="histTitle">未选择</span></h3>
+          <div id="histDetail" class="detail-empty">在左侧选择一条会话，查看该时段的事件流水与现场快照。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 数据统计 ================= -->
+    <section class="view" id="view-stats">
+      <div class="stat-cards">
+        <div class="stat-card"><div class="k">累计监测时长</div><div class="v" id="st-duration">0<small>min</small></div><div class="s">ALL SESSIONS</div></div>
+        <div class="stat-card"><div class="k">累计事件</div><div class="v" id="st-events">0</div><div class="s">EVENTS</div></div>
+        <div class="stat-card"><div class="k">预警事件</div><div class="v" id="st-alerts">0</div><div class="s">ALERTS</div></div>
+        <div class="stat-card"><div class="k">高危占比</div><div class="v" id="st-high">0<small>%</small></div><div class="s">HIGH RISK RATIO</div></div>
+        <div class="stat-card"><div class="k">涉及目标</div><div class="v" id="st-ids">0</div><div class="s">UNIQUE IDS</div></div>
+        <div class="stat-card"><div class="k">平均置信度</div><div class="v" id="st-conf">0.00</div><div class="s">AVG CONFIDENCE</div></div>
+      </div>
+      <div class="chart-grid">
+        <div class="card">
+          <h3>时段事件分布 <span class="sub">24H</span></h3>
+          <div class="chart-box"><canvas id="chartHour"></canvas></div>
+        </div>
+        <div class="card">
+          <h3>事件类型构成 <span class="sub">TYPE</span></h3>
+          <div class="chart-box"><canvas id="chartType"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 系统设置 ================= -->
+    <section class="view" id="view-settings">
+      <div class="set-grid">
+        <div class="card">
+          <h3>识别阈值</h3>
+          <div class="set-row">
+            <label>跌倒判定躯干倾角<small>躯干与竖直方向夹角超过该值即视为跌倒候选</small></label>
+            <input type="range" data-cfg="fallAngle" min="40" max="85" step="1" />
+            <span class="val" data-val="fallAngle"></span>
+          </div>
+          <div class="set-row">
+            <label>弯腰判定起始角度<small>与膝关节伸直程度共同判定弯腰作业</small></label>
+            <input type="range" data-cfg="bendAngle" min="15" max="55" step="1" />
+            <span class="val" data-val="bendAngle"></span>
+          </div>
+          <div class="set-row">
+            <label>膝关节伸直阈值<small>角度越大越要求腿部伸直，避免深蹲误判</small></label>
+            <input type="range" data-cfg="kneeStraight" min="110" max="178" step="1" />
+            <span class="val" data-val="kneeStraight"></span>
+          </div>
+          <div class="set-row">
+            <label>弯腰持续帧数<small>连续满足的帧数，越大越不敏感</small></label>
+            <input type="range" data-cfg="bendFrames" min="2" max="12" step="1" />
+            <span class="val" data-val="bendFrames"></span>
+          </div>
+          <div class="set-row">
+            <label>跌倒持续帧数<small>连续满足条件的帧数，抑制瞬时误报</small></label>
+            <input type="range" data-cfg="fallFrames" min="2" max="15" step="1" />
+            <span class="val" data-val="fallFrames"></span>
+          </div>
+          <div class="set-row">
+            <label>攀爬举手保持时长<small>双手持续高于肩线的时长（秒）</small></label>
+            <input type="range" data-cfg="climbHold" min="0.3" max="3" step="0.1" />
+            <span class="val" data-val="climbHold"></span>
+          </div>
+          <div class="set-row">
+            <label>滞留判定时长<small>在危险区内连续停留超过该时长触发滞留预警</small></label>
+            <input type="range" data-cfg="loiterSec" min="3" max="60" step="1" />
+            <span class="val" data-val="loiterSec"></span>
+          </div>
+          <div class="set-row">
+            <label>事件记录置信度下限<small>低于该值的事件不写入记录，减少误报</small></label>
+            <input type="range" data-cfg="confGate" min="0.4" max="0.95" step="0.01" />
+            <span class="val" data-val="confGate"></span>
+          </div>
+          <div class="set-row">
+            <label>事件冷却时间<small>同一目标同一事件的最小记录间隔</small></label>
+            <input type="range" data-cfg="eventCooldown" min="2" max="30" step="1" />
+            <span class="val" data-val="eventCooldown"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>语音播报 <span class="sub">VOICE</span></h3>
+          <div class="set-row">
+            <label>启用语音播报<small>检测到危险动作时自动喊话，并把情况推送到主界面告警队列</small></label>
+            <input type="checkbox" class="switch" data-cfg="voiceEnabled" />
+          </div>
+          <div class="set-row">
+            <label>播报音色<small>优先系统中文语音；列表为空说明本机尚未安装中文语音包</small></label>
+            <select id="voiceSelect" style="width:176px"></select>
+          </div>
+          <div class="set-row">
+            <label>语速<small>现场嘈杂或回声较大时建议放慢</small></label>
+            <input type="range" data-cfg="voiceRate" min="0.6" max="1.6" step="0.05" />
+            <span class="val" data-val="voiceRate"></span>
+          </div>
+          <div class="set-row">
+            <label>音量</label>
+            <input type="range" data-cfg="voiceVolume" min="0" max="1" step="0.05" />
+            <span class="val" data-val="voiceVolume"></span>
+          </div>
+          <div class="set-row">
+            <label>高危重复次数<small>跌倒等高危告警连续播报的次数</small></label>
+            <input type="range" data-cfg="voiceRepeat" min="1" max="3" step="1" />
+            <span class="val" data-val="voiceRepeat"></span>
+          </div>
+          <div class="set-row">
+            <label>同话术最小间隔<small>相同内容在该时间内不重复播报，避免刷屏</small></label>
+            <input type="range" data-cfg="voiceMinGap" min="2" max="30" step="1" />
+            <span class="val" data-val="voiceMinGap"></span>
+          </div>
+          <div class="set-row">
+            <label>未处理告警重播间隔<small>高危告警一直没人确认时，按此间隔反复提醒</small></label>
+            <input type="range" data-cfg="reAlertSec" min="10" max="120" step="5" />
+            <span class="val" data-val="reAlertSec"></span>
+          </div>
+          <div class="set-row">
+            <label>仅播报高危事件<small>开启后中低风险只进告警队列，不出声</small></label>
+            <input type="checkbox" class="switch" data-cfg="voiceHighOnly" />
+          </div>
+          <div class="set-row" style="gap:8px;flex-wrap:wrap">
+            <button class="btn sm" id="btnVoiceTestCfg">试听当前音色</button>
+            <button class="btn sm ghost" id="btnVoiceStopCfg">停止播报</button>
+          </div>
+          <p class="mini-note" style="margin-top:10px">
+            默认话术：跌倒 → <code>请注意，工作区内有人摔倒</code>；滞留 → <code>请勿逗留</code>；
+            闯入危险区 → <code>危险区域，请立即离开</code>；攀爬 → <code>请勿攀爬，注意高处坠落风险</code>。
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>采集与显示</h3>
+          <div class="set-row">
+            <label>最大检测人数<small>PoseLandmarker numPoses，修改后需重启采集</small></label>
+            <input type="range" data-cfg="maxPersons" min="1" max="8" step="1" />
+            <span class="val" data-val="maxPersons"></span>
+          </div>
+          <div class="set-row">
+            <label>推理帧率上限<small>降低可减少 CPU 占用</small></label>
+            <input type="range" data-cfg="maxFps" min="8" max="30" step="1" />
+            <span class="val" data-val="maxFps"></span>
+          </div>
+          <div class="set-row">
+            <label>关键点模型精度<small>高精度更贴合肢体细节，算力占用更高；重启采集后生效</small></label>
+            <select data-cfg="modelQuality" style="width:118px">
+              <option value="lite">标准 lite</option>
+              <option value="full">高精度 full</option>
+            </select>
+          </div>
+          <div class="set-row">
+            <label>场景名称<small>用于事件位置标注</small></label>
+            <input type="text" data-cfg="scene" style="width:130px" />
+          </div>
+          <div class="set-row"><label>画面镜像</label><input type="checkbox" class="switch" data-cfg="mirror" /></div>
+          <div class="set-row"><label>骨骼连线显示</label><input type="checkbox" class="switch" data-cfg="showSkeleton" /></div>
+          <div class="set-row"><label>目标框与 ID 显示</label><input type="checkbox" class="switch" data-cfg="showBox" /></div>
+          <div class="set-row"><label>告警提示音</label><input type="checkbox" class="switch" data-cfg="sound" /></div>
+          <div class="set-row"><label>预警保存现场快照</label><input type="checkbox" class="switch" data-cfg="saveThumb" /></div>
+          <div class="set-row" style="gap:8px;flex-wrap:wrap">
+            <button class="btn sm" id="btnSaveCfg">保存设置</button>
+            <button class="btn sm ghost" id="btnResetCfg">恢复默认</button>
+            <button class="btn sm danger" id="btnClearData">清空历史数据</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>危险区域 <span class="sub" id="zoneCount">0</span></h3>
+          <ul class="zone-list" id="zoneList">
+            <li class="detail-empty" style="background:none;border:0;padding:0">暂无区域。在实时监控中点击「绘制危险区」，在画面内依次点选顶点后点「完成区域」。</li>
+          </ul>
+          <p class="mini-note" style="margin-top:10px">
+            区域坐标以画面归一化比例保存，分辨率或窗口尺寸变化后仍能准确套用。
+            绘制时画面上方会显示顶点数量，至少 3 个顶点可闭合为多边形。
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>实现说明</h3>
+          <p class="mini-note">
+            <b>检测与关键点</b>：浏览器端 MediaPipe PoseLandmarker（33 关键点，多目标），对应原方案的 YOLOv8-Pose 关键点输出（COCO-17 可映射）。<br />
+            <b>追踪</b>：按 DeepSORT 思路实现的轻量版 —— IoU + 质心距离级联匹配、轨迹老化淘汰、ID 终身保留。<br />
+            <b>行为判定</b>：躯干倾角 + 膝关节夹角 + 髋部下落速度的多规则时序投票，避免单帧误判。<br />
+            <b>语音闭环</b>：判定 → 事件入库 → 话术播报（Web Speech，本机合成）→ 主界面告警队列 → 人工确认 / 超时重播。<br />
+            <b>图片静态检测</b>：上传现场照片（支持拖拽与粘贴）后做单帧关键点提取与几何判定，输出人数、危险姿态、区域违规，可导出带骨骼的标注图。<br />
+            <b>全部推理与语音合成在本机完成</b>，画面与文字不出本机，模型与 WASM 运行时随项目离线打包，无需联网。
+          </p>
+          <p class="mini-note" style="margin-top:8px">
+            需要 <code>http://localhost</code> 或 <code>https</code> 环境才能调用摄像头，直接双击 html 打开可能被浏览器拦截。
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ================= 数据来源弹层 ================= -->
+<div class="modal" id="modalSources">
+  <div class="modal-body">
+    <h2>数据来源与参考仓库</h2>
+    <p class="lead">以下为 GitHub / 公开数据集中与本系统同类的实现与数据，用于架构对齐与数据格式参考。</p>
+    <div class="src">
+      <a href="https://github.com/ultralytics/ultralytics" target="_blank" rel="noreferrer">
+        <b>ultralytics / ultralytics</b>
+        <span>YOLOv8-Pose 官方实现，17 关键点 COCO 格式、训练与导出流程</span>
+        <code>github.com/ultralytics/ultralytics</code>
+      </a>
+      <a href="https://github.com/mikel-brostrom/boxmot" target="_blank" rel="noreferrer">
+        <b>mikel-brostrom / boxmot</b>
+        <span>DeepSORT / BoT-SORT / ByteTrack 等追踪器集合，ID 匹配策略参考</span>
+        <code>github.com/mikel-brostrom/boxmot</code>
+      </a>
+      <a href="https://github.com/nwojke/deep_sort" target="_blank" rel="noreferrer">
+        <b>nwojke / deep_sort</b>
+        <span>DeepSORT 原始实现（卡尔曼滤波 + 外观特征 + 级联匹配）</span>
+        <code>github.com/nwojke/deep_sort</code>
+      </a>
+      <a href="https://github.com/open-mmlab/mmpose" target="_blank" rel="noreferrer">
+        <b>open-mmlab / mmpose</b>
+        <span>MMPose 姿态估计工具箱，关键点定义与评测指标</span>
+        <code>github.com/open-mmlab/mmpose</code>
+      </a>
+      <a href="https://cocodataset.org/#keypoints-2020" target="_blank" rel="noreferrer">
+        <b>COCO Keypoints 2020</b>
+        <span>预训练用关键点数据集（person keypoints，17 点标注）</span>
+        <code>cocodataset.org</code>
+      </a>
+      <a href="https://github.com/SaddamBInSyed/visionguard" target="_blank" rel="noreferrer">
+        <b>SaddamBInSyed / visionguard</b>
+        <span>工业人员安全监控：YOLOv8-Pose + ByteTrack + 区域告警 + 看板</span>
+        <code>github.com/SaddamBInSyed/visionguard</code>
+      </a>
+      <a href="https://github.com/InvictusRex/Fall-Detection-and-Pose-Classification" target="_blank" rel="noreferrer">
+        <b>InvictusRex / Fall-Detection-and-Pose-Classification</b>
+        <span>跌倒判定方法：包围盒宽高比 + 脊柱向量倾角（本系统规则来源）</span>
+        <code>github.com/InvictusRex/Fall-Detection-and-Pose-Classification</code>
+      </a>
+      <a href="https://github.com/Solitude2025/Fall_Dectection" target="_blank" rel="noreferrer">
+        <b>Solitude2025 / Fall_Dectection</b>
+        <span>时空语义跌倒检测，含浏览器监控台与事件回放思路</span>
+        <code>github.com/Solitude2025/Fall_Dectection</code>
+      </a>
+    </div>
+    <p class="mini-note" style="margin-top:14px">
+      本系统未直接复用上述代码：将 YOLOv8-Pose 替换为浏览器端 PoseLandmarker，以零安装、无 GPU 的方式实现同样的
+      「骨骼关键点 + 多目标追踪 + 规则判定 + 语音喊话 + 事件留档」闭环；后续如需论文级指标，可迁移至 <code>ultralytics + boxmot</code> 后端。
+    </p>
+    <div class="modal-close"><button class="btn" id="btnCloseSources">关闭</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* 直接双击 html（file://）时浏览器会禁止加载 ES 模块与摄像头，给出明确指引 */
+  if (location.protocol === 'file:') {
+    document.addEventListener('DOMContentLoaded', function () {
+      var e = document.getElementById('stageError');
+      if (e) {
+        e.classList.add('show');
+        e.textContent = '当前是 file:// 方式打开，浏览器会拦截摄像头与模块加载，请用 start.bat 启动后访问 http://localhost:8123/';
+      }
+    });
+  }
+</script>
+<script type="module" src="assets/js/app.js?v=20261126b"></script>
+</body>
+</html>

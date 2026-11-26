@@ -1,0 +1,18 @@
+# 依赖与构建产物
+node_modules/
+package-lock.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# 平台标记文件（不属于源码）
+.workbuddy/
+.wbapp_*.genie
+
+# 本地测试产物
+test/
+.tools/
